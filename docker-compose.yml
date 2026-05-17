@@ -26,7 +26,7 @@ services:
       - SERVICE=api
     volumes:
       - ./backend:/app
-      - model_data:/app/models
+      - ./backend/models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +49,7 @@ services:
       - PYTHONPATH=/app
     volumes:
       - ./backend:/app
-      - model_data:/app/models
+      - ./backend/models:/app/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,7 +132,6 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-  model_data:
 
 networks:
   caern_net:

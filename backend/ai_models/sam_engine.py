@@ -94,6 +94,20 @@ class SAMEngine(BaseAIModel):
         return detections
 
     def _detect_model_type(self) -> str:
+        # Boyuttan tespit etmek isim yanlışsa (örn. vit_b ağırlığı sam_vit_h.pth
+        # olarak adlandırılmış) state_dict eşleşmesi hatasını önler.
+        try:
+            size_mb = self.model_path.stat().st_size / (1024 * 1024)
+        except OSError:
+            size_mb = 0
+
+        if size_mb > 2000:
+            return "vit_h"
+        if size_mb > 800:
+            return "vit_l"
+        if size_mb > 200:
+            return "vit_b"
+
         name = self.model_path.name.lower()
         if "vit_h" in name:
             return "vit_h"

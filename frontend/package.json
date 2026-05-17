@@ -1,0 +1,42 @@
+{
+  "name": "caern-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext .ts,.tsx"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.22.3",
+    "leaflet": "^1.9.4",
+    "react-leaflet": "^4.2.1",
+    "zustand": "^4.5.2",
+    "axios": "^1.6.8",
+    "@tanstack/react-query": "^5.32.1",
+    "react-hook-form": "^7.51.3",
+    "zod": "^3.23.3",
+    "@hookform/resolvers": "^3.3.4",
+    "react-hot-toast": "^2.4.1",
+    "lucide-react": "^0.376.0",
+    "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
+    "jwt-decode": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/leaflet": "^1.9.12",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11",
+    "tailwindcss": "^3.4.3",
+    "postcss": "^8.4.38",
+    "autoprefixer": "^10.4.19",
+    "@eslint/js": "^9.2.0",
+    "eslint": "^9.2.0"
+  }
+}

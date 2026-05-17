@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Env
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Docker volumes
+postgres_data/
+redis_data/
+minio_data/
+
+# Models
+backend/models/*.pt
+backend/models/*.pth
+backend/models/*.onnx
+
+# TLS certs
+nginx/certs/*.key
+nginx/certs/*.crt
+nginx/certs/*.pem
+
+# Temp
+tmp/
+*.tmp

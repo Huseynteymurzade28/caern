@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet container must have explicit height */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  border-radius: 0.5rem;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  @apply bg-gray-50 text-gray-900;
+}

@@ -38,6 +38,7 @@ def run_analysis(
     before_path: str,
     after_path: str,
     confidence_threshold: float = 0.5,
+    min_area_m2: float = 25.0,
 ) -> dict:
     """Main Celery task: execute the full analysis pipeline."""
     from data_access.database import AsyncSessionLocal
@@ -62,7 +63,9 @@ def run_analysis(
             await job_repo.update_status(job, JobStatus.running, progress=5.0)
             await broadcast_progress(job_id, 5, "Analiz başlatıldı")
 
-            orchestrator = JobOrchestrator(job_id, confidence_threshold)
+            orchestrator = JobOrchestrator(
+                job_id, confidence_threshold, min_area_m2=min_area_m2
+            )
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_dir = Path(tmp)
@@ -78,8 +81,9 @@ def run_analysis(
                     )
 
                 try:
-                    features = await loop.run_in_executor(
-                        None, lambda: orchestrator.run(b_local, a_local, _progress_cb)
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: orchestrator.run(b_local, a_local, _progress_cb),
                     )
                 except SoftTimeLimitExceeded:
                     await job_repo.update_status(
@@ -88,24 +92,43 @@ def run_analysis(
                     await broadcast_progress(job_id, 0, "FAILED:GPU timeout")
                     raise GPUTimeoutError("GPU zaman aşımı")
 
+            features = result.get("features", [])
+            metrics = result.get("metrics", {})
+
             await job_repo.update_status(job, JobStatus.aggregating, progress=90.0)
             await broadcast_progress(job_id, 90, "Sonuçlar kaydediliyor")
 
-            # Persist ChangeResult rows
             for feat in features:
                 geom = shape(feat["geometry"])
                 props = feat["properties"]
-                label_str = props.get("classLabel", "bina")
-                label = ClassLabel(label_str) if label_str in ClassLabel.__members__.values() else ClassLabel.bina
+                category = props.get("category") or "YUZEY_DEG"
+                try:
+                    label_enum = ClassLabel(category)
+                except ValueError:
+                    label_enum = ClassLabel.YUZEY_DEG
+
+                centroid = props.get("centroid") or [None, None]
+                bbox = props.get("bbox") or [None, None, None, None]
                 cr = ChangeResult(
                     job_id=job_id,
                     geom=from_shape(geom, srid=4326),
-                    class_label=label,
-                    confidence=props["confidence"],
-                    change_type=props["changeType"],
-                    area_m2=float(geom.area * 1e10),
+                    class_label=label_enum,
+                    confidence=float(props.get("confidence", 0.5)),
+                    change_type=category,
+                    area_m2=float(props.get("areaM2") or 0.0),
+                    area_px=int(props.get("areaPx") or 0),
+                    centroid_lon=float(centroid[0]) if centroid[0] is not None else None,
+                    centroid_lat=float(centroid[1]) if centroid[1] is not None else None,
+                    bbox_minx=float(bbox[0]) if bbox[0] is not None else None,
+                    bbox_miny=float(bbox[1]) if bbox[1] is not None else None,
+                    bbox_maxx=float(bbox[2]) if bbox[2] is not None else None,
+                    bbox_maxy=float(bbox[3]) if bbox[3] is not None else None,
                 )
                 session.add(cr)
+
+            # Job-level metrics + detection mode
+            job.metric_summary = metrics
+            job.detection_mode = metrics.get("detection_mode")
 
             await session.flush()
             await job_repo.update_status(job, JobStatus.completed, progress=100.0)

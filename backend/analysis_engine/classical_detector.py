@@ -1,133 +1,233 @@
 """Klasik bilgisayarli gorme tabanli degisiklik tespiti.
 
-AI modelleri (YOLO/SAM) yuklenemedigi veya runtime'da hata uretiği durumlarda
-devreye girer. Pixel farki + morfoloji + kontur cikarimi ile bina/araç
-büyüklügünde degisiklik bolgeleri bulur. Bu sayede pipeline her zaman elle
-tutulur sonuc uretir.
+İki ortorektifiye edilmiş RGB görüntü arasındaki değişim bölgelerini bulur ve
+her bölgeyi otomatik olarak kategorize eder:
+
+  * YENI_YAPI  — önceden düşük, sonradan yüksek yansıma (yapılaşma)
+  * YIKIM      — önceden yüksek, sonradan düşük yansıma (yıkım/temizleme)
+  * VEJETASYON — yeşil kanal hâkim değişim
+  * YUZEY_DEG  — diğer tüm yüzey değişimleri
+
+Yöntem:
+  1. Normalized Difference Index — |after - before| / (after + before + ε)
+     → ışıklandırma farklarına karşı dayanıklı eşikleme
+  2. Morfoloji (erosion + dilation) — tek piksel gürültüsünü temizler
+  3. scipy.ndimage.label ile bağlı bileşen analizi → her değişim bölgesi
+     ayrı bir nesne olarak etiketlenir
+  4. Minimum alan eşiği uygulanır (varsayılan 25 m²)
+  5. Her bölgenin ortalama RGB değerleri kullanılarak otomatik kategori
 """
 from __future__ import annotations
 
-from typing import List
+from dataclasses import dataclass
+from typing import List, Tuple
 
 import cv2
 import numpy as np
+from scipy import ndimage as sndi
 
-from ai_models.base import Detection
 from common_utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Minimum alan (piksel). Cok kucuk gurultu bolgelerini eler.
-MIN_AREA_PX = 1500
-# Maksimum kontur sayisi — UI okunaklilik + SAM rafine suresi icin.
-MAX_DETECTIONS = 25
-# Pixel-fark esigi (0-255). Yuksek = daha az gurultu.
-DIFF_THRESHOLD = 45
+
+# Varsayilan parametreler — orchestrator override edebilir
+DEFAULT_NDI_THRESHOLD = 0.18          # 0..1 araliginda, daha yuksek = daha az tespit
+DEFAULT_MIN_AREA_M2 = 25.0            # m^2 (px^2'ye orchestrator'da cevrilir)
+MAX_DETECTIONS = 200                   # gorsellik icin ust limit
+DEFAULT_MORPH_KERNEL = 5               # piksel
+DEFAULT_PIXEL_AREA_M2 = 0.25 * 0.25    # 0.25 m GSD varsayilan (= 0.0625 m^2/px)
+
+
+@dataclass
+class RegionDetection:
+    """Tespit edilen tek bir degisim bolgesi."""
+    label_id: int
+    bbox: Tuple[float, float, float, float]   # x1, y1, x2, y2 (piksel)
+    centroid_px: Tuple[float, float]          # (cx, cy) piksel
+    area_px: int
+    area_m2: float
+    confidence: float                          # 0..1
+    category: str                              # YENI_YAPI / YIKIM / VEJETASYON / YUZEY_DEG
+    mean_before_rgb: Tuple[float, float, float]
+    mean_after_rgb: Tuple[float, float, float]
+    pixel_mask: np.ndarray | None = None       # bool, full-size
 
 
 def detect_changes(
     before_rgb: np.ndarray,
     after_rgb: np.ndarray,
-    confidence_threshold: float = 0.5,
-) -> tuple[List[Detection], List[Detection]]:
-    """Iki goruntu arasindaki degisiklikleri tespit eder.
+    *,
+    ndi_threshold: float = DEFAULT_NDI_THRESHOLD,
+    min_area_m2: float = DEFAULT_MIN_AREA_M2,
+    pixel_area_m2: float = DEFAULT_PIXEL_AREA_M2,
+    morph_kernel: int = DEFAULT_MORPH_KERNEL,
+) -> Tuple[List[RegionDetection], np.ndarray]:
+    """Iki goruntu arasinda degisim bolgelerini bulup kategorize eder.
 
     Returns:
-        (before_detections, after_detections)
-        - before_detections: before'da olup after'da olmayan (kayip) bolgeler
-        - after_detections: after'da olup before'da olmayan (yeni) bolgeler
+        (regions, diff_uint8)
+        - regions: List[RegionDetection]
+        - diff_uint8: piksel fark gorseli (0..255, gri) — histogram icin
     """
-    log.info("classical_detector_start", before_shape=before_rgb.shape, after_shape=after_rgb.shape)
-
-    # Boyutlari esitle
-    h = min(before_rgb.shape[0], after_rgb.shape[0])
-    w = min(before_rgb.shape[1], after_rgb.shape[1])
-    before = cv2.resize(before_rgb, (w, h))
-    after = cv2.resize(after_rgb, (w, h))
-
-    # Griye cevir + isiklandirma esitleme
-    g_before = cv2.cvtColor(before, cv2.COLOR_RGB2GRAY)
-    g_after = cv2.cvtColor(after, cv2.COLOR_RGB2GRAY)
-    g_before = cv2.equalizeHist(g_before)
-    g_after = cv2.equalizeHist(g_after)
-
-    # Mutlak fark
-    diff = cv2.absdiff(g_before, g_after)
-
-    # Gurultu azaltma + esikleme
-    diff = cv2.GaussianBlur(diff, (7, 7), 0)
-    _, mask = cv2.threshold(diff, DIFF_THRESHOLD, 255, cv2.THRESH_BINARY)
-
-    # Morfoloji: kucuk lekeleri birlestir, gurultuyu sil
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    # Hangi tarafta degisim var: before mu, after mi daha parlak/koyu?
-    # before > after ise "kayip" (yikilan/kaldirilmis); after > before ise "yeni"
-    lost_mask = ((g_before.astype(np.int16) - g_after.astype(np.int16)) > DIFF_THRESHOLD).astype(np.uint8) * 255
-    new_mask = ((g_after.astype(np.int16) - g_before.astype(np.int16)) > DIFF_THRESHOLD).astype(np.uint8) * 255
-    lost_mask = cv2.bitwise_and(lost_mask, mask)
-    new_mask = cv2.bitwise_and(new_mask, mask)
-
-    before_dets = _mask_to_detections(lost_mask, diff, label="bina", side="before")
-    after_dets = _mask_to_detections(new_mask, diff, label="bina", side="after")
-
     log.info(
-        "classical_detector_done",
-        lost=len(before_dets),
-        new=len(after_dets),
+        "classical_detector_start",
+        before_shape=before_rgb.shape,
+        after_shape=after_rgb.shape,
+        ndi_threshold=ndi_threshold,
+        min_area_m2=min_area_m2,
     )
-    return before_dets, after_dets
 
+    # Boyutlari hizala
+    H = min(before_rgb.shape[0], after_rgb.shape[0])
+    W = min(before_rgb.shape[1], after_rgb.shape[1])
+    before = cv2.resize(before_rgb, (W, H))
+    after = cv2.resize(after_rgb, (W, H))
 
-def _mask_to_detections(
-    mask: np.ndarray, diff: np.ndarray, label: str, side: str
-) -> List[Detection]:
-    """Maskeden kontur cikarip Detection listesine cevirir."""
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Griye + isiklandirma normalizasyonu
+    g_before = cv2.cvtColor(before, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    g_after = cv2.cvtColor(after, cv2.COLOR_RGB2GRAY).astype(np.float32)
 
-    # En buyukten kuçuğe sirala (en belirgin degisiklikler oncelikli)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    # NDI = |after - before| / (after + before + eps)
+    eps = 1e-3
+    ndi = np.abs(g_after - g_before) / (g_after + g_before + eps)
 
-    detections: List[Detection] = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < MIN_AREA_PX:
+    # Klasik mutlak fark (0..255) — histogram icin
+    diff_uint8 = cv2.absdiff(
+        cv2.cvtColor(before, cv2.COLOR_RGB2GRAY),
+        cv2.cvtColor(after, cv2.COLOR_RGB2GRAY),
+    )
+
+    # Esikleme
+    mask = (ndi > ndi_threshold).astype(np.uint8) * 255
+
+    # Morfoloji: erosion (gurultu) + dilation (delik kapat)
+    k = max(3, int(morph_kernel))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    mask = cv2.erode(mask, kernel, iterations=1)
+    mask = cv2.dilate(mask, kernel, iterations=2)
+
+    # Bagli bilesen analizi (scipy)
+    labels, n_components = sndi.label(mask > 0)
+    log.info("connected_components", n=int(n_components))
+
+    if n_components == 0:
+        return [], diff_uint8
+
+    # Her bilesen icin metrik + kategori
+    min_area_px = max(1, int(round(min_area_m2 / max(pixel_area_m2, 1e-9))))
+
+    regions: List[RegionDetection] = []
+    component_slices = sndi.find_objects(labels)
+    component_areas = sndi.sum(np.ones_like(labels), labels, index=np.arange(1, n_components + 1))
+
+    # Buyuklugu en yuksek olanlardan basla
+    order = np.argsort(-component_areas)
+
+    for idx in order:
+        label_id = int(idx) + 1
+        area_px = int(component_areas[idx])
+        if area_px < min_area_px:
             continue
 
-        x, y, w, h = cv2.boundingRect(cnt)
+        s = component_slices[idx]
+        if s is None:
+            continue
+        y_slice, x_slice = s
+        sub_mask = (labels[y_slice, x_slice] == label_id)
+        if not sub_mask.any():
+            continue
 
-        # Sinif tahmini: en-boy ve buyukluge gore basit heuristik
-        aspect = w / max(h, 1)
-        if area > 8000:
-            cls_name = "bina"
-            cls_id = 0
-        elif aspect > 2.0 or aspect < 0.5:
-            cls_name = "araç"
-            cls_id = 1
-        elif area < 1500:
-            cls_name = "ağaç"
-            cls_id = 2
-        else:
-            cls_name = "tarım_alanı"
-            cls_id = 3
+        y1, y2 = y_slice.start, y_slice.stop
+        x1, x2 = x_slice.start, x_slice.stop
 
-        # Confidence: bolgedeki ortalama fark yogunluguna bagli (0.5-0.95 arasi)
-        region_diff = diff[y : y + h, x : x + w]
-        intensity = float(region_diff.mean()) / 255.0
-        confidence = round(min(0.95, 0.5 + intensity * 0.7), 3)
+        # Centroid (alt-piksel)
+        ys, xs = np.where(sub_mask)
+        cy = float(ys.mean() + y1)
+        cx = float(xs.mean() + x1)
 
-        detections.append(
-            Detection(
-                bbox=[float(x), float(y), float(x + w), float(y + h)],
+        # Ortalama RGB (before/after) - sadece bu bilesen pikselleri
+        b_sub = before[y1:y2, x1:x2][sub_mask]
+        a_sub = after[y1:y2, x1:x2][sub_mask]
+        mean_b = tuple(float(v) for v in b_sub.mean(axis=0))
+        mean_a = tuple(float(v) for v in a_sub.mean(axis=0))
+
+        # Guven skoru: bolgedeki ortalama NDI yogunlugu
+        ndi_sub = ndi[y1:y2, x1:x2][sub_mask]
+        conf_raw = float(ndi_sub.mean())
+        confidence = round(min(0.99, 0.55 + conf_raw * 1.4), 3)
+
+        category = _classify_category(mean_b, mean_a)
+        area_m2 = area_px * pixel_area_m2
+
+        full_mask = np.zeros(labels.shape, dtype=bool)
+        full_mask[y1:y2, x1:x2] = sub_mask
+
+        regions.append(
+            RegionDetection(
+                label_id=label_id,
+                bbox=(float(x1), float(y1), float(x2), float(y2)),
+                centroid_px=(cx, cy),
+                area_px=area_px,
+                area_m2=area_m2,
                 confidence=confidence,
-                class_id=cls_id,
-                class_name=cls_name,
+                category=category,
+                mean_before_rgb=mean_b,
+                mean_after_rgb=mean_a,
+                pixel_mask=full_mask,
             )
         )
 
-        if len(detections) >= MAX_DETECTIONS:
+        if len(regions) >= MAX_DETECTIONS:
             break
 
-    return detections
+    log.info(
+        "classical_detector_done",
+        regions=len(regions),
+        categories={c: sum(1 for r in regions if r.category == c)
+                    for c in ("YENI_YAPI", "YIKIM", "VEJETASYON", "YUZEY_DEG")},
+    )
+    return regions, diff_uint8
+
+
+def _classify_category(
+    mean_before_rgb: Tuple[float, float, float],
+    mean_after_rgb: Tuple[float, float, float],
+) -> str:
+    """Bolge kategorisini RGB ortalamalarindan tahmin eder."""
+    rb, gb, bb = mean_before_rgb
+    ra, ga, ba = mean_after_rgb
+
+    sum_b = rb + gb + bb + 1e-6
+    sum_a = ra + ga + ba + 1e-6
+
+    green_ratio_before = gb / sum_b
+    green_ratio_after = ga / sum_a
+    brightness_before = (rb + gb + bb) / 3.0
+    brightness_after = (ra + ga + ba) / 3.0
+    delta_brightness = brightness_after - brightness_before
+
+    # Vejetasyon: sonraki gorüntüde yesil hakim VEYA yesil orani arttı
+    if green_ratio_after > 0.40 or (green_ratio_after - green_ratio_before) > 0.06:
+        return "VEJETASYON"
+
+    if delta_brightness > 25:
+        return "YENI_YAPI"
+    if delta_brightness < -25:
+        return "YIKIM"
+
+    return "YUZEY_DEG"
+
+
+def pixel_diff_histogram(diff_uint8: np.ndarray, bins: int = 10) -> List[dict]:
+    """0..255 araligindaki piksel fark gorselinden histogram uretir."""
+    hist, edges = np.histogram(diff_uint8.ravel(), bins=bins, range=(0, 255))
+    return [
+        {
+            "bin": i,
+            "range_min": float(edges[i]),
+            "range_max": float(edges[i + 1]),
+            "count": int(hist[i]),
+        }
+        for i in range(bins)
+    ]

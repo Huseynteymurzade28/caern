@@ -28,6 +28,7 @@ shapely==2.0.4
 pyproj==3.6.1
 fiona==1.9.6
 numpy==1.26.4
+scipy==1.13.0
 
 # AI / ML
 torch==2.3.0

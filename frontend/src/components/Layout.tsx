@@ -1,6 +1,6 @@
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "@/store/auth";
-import { Map, LayoutDashboard, Plus, FileText, Settings, LogOut } from "lucide-react";
+import { Globe2, LayoutDashboard, Plus, FileText, Shield, LogOut } from "lucide-react";
 import clsx from "clsx";
 
 const navItems = [
@@ -12,6 +12,11 @@ const navItems = [
 export default function Layout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // MapScreen ekraninda navbar-only layout (sidebar yok — MapScreen kendi
+  // sol/sag panellerini yonetiyor).
+  const isMap = location.pathname.startsWith("/map/");
 
   function handleLogout() {
     logout();
@@ -19,27 +24,34 @@ export default function Layout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-100">
-      {/* Sidebar */}
-      <aside className="w-56 flex flex-col bg-primary-900 text-white shadow-xl">
-        <div className="flex items-center gap-2 px-5 py-4 border-b border-primary-700">
-          <Map size={22} />
-          <span className="font-bold text-lg tracking-wide">CAERN</span>
+    <div className="flex flex-col h-screen overflow-hidden">
+      {/* NAVBAR */}
+      <header className="flex-shrink-0 h-14 bg-bg-panel/95 backdrop-blur border-b border-border flex items-center px-5 gap-6 z-30">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded bg-gradient-to-br from-accent/30 to-accent/10 flex items-center justify-center border border-accent/40">
+            <Globe2 size={18} className="text-accent" />
+          </div>
+          <div>
+            <div className="text-base font-bold tracking-wide text-text-primary leading-none">CAERN</div>
+            <div className="text-[9px] uppercase tracking-[0.18em] text-text-muted mt-0.5">Geo Change Detection</div>
+          </div>
         </div>
 
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex items-center gap-1 ml-4">
           {navItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                  isActive ? "bg-primary-600" : "hover:bg-primary-700"
+                  "flex items-center gap-1.5 px-3 h-9 rounded text-sm font-medium transition-colors",
+                  isActive
+                    ? "text-accent bg-accent/10 border border-accent/30"
+                    : "text-text-muted hover:text-text-primary hover:bg-bg-elev"
                 )
               }
             >
-              <Icon size={18} />
+              <Icon size={14} />
               {label}
             </NavLink>
           ))}
@@ -48,31 +60,39 @@ export default function Layout() {
               to="/admin"
               className={({ isActive }) =>
                 clsx(
-                  "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                  isActive ? "bg-primary-600" : "hover:bg-primary-700"
+                  "flex items-center gap-1.5 px-3 h-9 rounded text-sm font-medium transition-colors",
+                  isActive
+                    ? "text-accent bg-accent/10 border border-accent/30"
+                    : "text-text-muted hover:text-text-primary hover:bg-bg-elev"
                 )
               }
             >
-              <Settings size={18} />
+              <Shield size={14} />
               Admin
             </NavLink>
           )}
         </nav>
 
-        <div className="p-3 border-t border-primary-700">
-          <div className="text-xs text-primary-300 mb-2 truncate px-1">{user?.email}</div>
+        <div className="flex-1" />
+
+        <div className="flex items-center gap-3 text-xs">
+          <div className="text-right leading-tight">
+            <div className="text-text-primary font-medium">{user?.username || user?.email}</div>
+            <div className="text-text-subtle uppercase tracking-wide text-[9px]">
+              {user?.role}
+            </div>
+          </div>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm hover:bg-primary-700 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 h-8 rounded border border-border text-text-muted hover:text-accent-red hover:border-accent-red/50 transition-colors"
+            title="Çıkış"
           >
-            <LogOut size={16} />
-            Çıkış
+            <LogOut size={14} />
           </button>
         </div>
-      </aside>
+      </header>
 
-      {/* Main */}
-      <main className="flex-1 overflow-auto">
+      <main className={clsx("flex-1 overflow-hidden", isMap ? "" : "overflow-auto")}>
         <Outlet />
       </main>
     </div>

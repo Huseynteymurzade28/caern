@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import DateTime, Enum, Float, ForeignKey, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from data_access.database import Base
@@ -51,6 +51,9 @@ class AnalysisJob(Base):
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    min_area_m2: Mapped[float] = mapped_column(Float, default=25.0, nullable=False)
+    detection_mode: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    metric_summary: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

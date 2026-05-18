@@ -34,48 +34,60 @@ export default function Reports() {
   }
 
   return (
-    <div className="p-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Raporlar</h1>
+    <div className="p-8 max-w-7xl mx-auto">
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold text-text-primary">Raporlar</h1>
+        <p className="text-text-muted text-sm mt-1">
+          Üretilmiş PDF ve CSV raporları
+        </p>
+      </div>
 
       {isLoading ? (
-        <div className="text-center py-20 text-gray-400">Yükleniyor...</div>
+        <div className="text-center py-20 text-text-subtle">Yükleniyor…</div>
       ) : !reports?.length ? (
-        <div className="text-center py-20 text-gray-400">Henüz rapor yok.</div>
+        <div className="card p-16 text-center">
+          <FileText size={32} className="text-text-subtle mx-auto mb-3" />
+          <div className="text-text-muted">Henüz rapor yok</div>
+          <p className="text-text-subtle text-sm mt-1">
+            Bir analiz tamamlandığında harita ekranından rapor üretebilirsiniz
+          </p>
+        </div>
       ) : (
-        <div className="bg-white rounded-xl shadow overflow-hidden">
+        <div className="card overflow-hidden">
           <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Format</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Job</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Boyut</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Tarih</th>
-                <th className="px-6 py-3" />
+            <thead>
+              <tr className="border-b border-border-subtle bg-bg-elev/40">
+                <th className="px-5 py-3 text-left label-sm">Format</th>
+                <th className="px-5 py-3 text-left label-sm">Analiz</th>
+                <th className="px-5 py-3 text-left label-sm">Boyut</th>
+                <th className="px-5 py-3 text-left label-sm">Tarih</th>
+                <th className="px-5 py-3" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {reports.map((r) => (
-                <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4">
+                <tr key={r.id} className="border-b border-border-subtle hover:bg-bg-elev/50">
+                  <td className="px-5 py-3">
                     <div className="flex items-center gap-2">
-                      <FileText size={16} className="text-gray-400" />
-                      <span className="font-medium uppercase text-xs">{r.format}</span>
+                      <FileText size={14} className="text-text-muted" />
+                      <span className="font-medium uppercase text-xs text-text-primary">{r.format}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 font-mono text-xs text-gray-500">{r.job_id.slice(0, 8)}…</td>
-                  <td className="px-6 py-4 text-gray-500 text-xs">
+                  <td className="px-5 py-3 font-mono text-xs text-text-muted">
+                    {r.job_id.slice(0, 12)}…
+                  </td>
+                  <td className="px-5 py-3 text-text-muted text-xs">
                     {r.size_bytes ? `${(r.size_bytes / 1024).toFixed(0)} KB` : "—"}
                   </td>
-                  <td className="px-6 py-4 text-gray-500 text-xs">
+                  <td className="px-5 py-3 text-text-muted text-xs">
                     {format(new Date(r.created_at), "d MMM yyyy HH:mm", { locale: tr })}
                   </td>
-                  <td className="px-6 py-4 text-right">
+                  <td className="px-5 py-3 text-right">
                     <button
                       onClick={() => handleDownload(r.id)}
-                      className="flex items-center gap-1 text-primary-600 hover:text-primary-700 text-xs font-medium ml-auto"
+                      className="btn-ghost text-xs"
                     >
-                      <Download size={14} />
-                      İndir
+                      <Download size={12} /> İndir
                     </button>
                   </td>
                 </tr>

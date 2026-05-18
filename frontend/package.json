@@ -14,6 +14,8 @@
     "react-router-dom": "^6.22.3",
     "leaflet": "^1.9.4",
     "react-leaflet": "^4.2.1",
+    "recharts": "^2.12.7",
+    "leaflet-minimap": "^3.6.1",
     "zustand": "^4.5.2",
     "axios": "^1.6.8",
     "@tanstack/react-query": "^5.32.1",

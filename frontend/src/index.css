@@ -2,14 +2,159 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Leaflet container must have explicit height */
+@layer base {
+  :root {
+    --grid-size: 32px;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background-color: #0a0f1e;
+    color: #e7eef9;
+    background-image:
+      linear-gradient(rgba(30, 58, 95, 0.10) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30, 58, 95, 0.10) 1px, transparent 1px);
+    background-size: var(--grid-size) var(--grid-size);
+    background-attachment: fixed;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: #1e3a5f;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #2a4d7a; }
+
+  ::selection {
+    background: rgba(0, 212, 255, 0.30);
+    color: #e7eef9;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-bg-panel/85 backdrop-blur-sm border border-border-subtle;
+  }
+
+  .card {
+    @apply bg-bg-card border border-border rounded-lg;
+  }
+
+  .card-elev {
+    @apply bg-bg-elev border border-border rounded-lg;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded text-sm font-medium
+           transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-bg-base hover:bg-accent-dim;
+  }
+
+  .btn-secondary {
+    @apply btn bg-bg-elev text-text-primary border border-border hover:border-accent/60 hover:text-accent;
+  }
+
+  .btn-ghost {
+    @apply btn text-text-muted hover:text-accent hover:bg-bg-elev;
+  }
+
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide;
+  }
+
+  .input {
+    @apply bg-bg-card border border-border text-text-primary rounded px-3 py-2 text-sm
+           focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/40;
+  }
+
+  .label-sm {
+    @apply text-[10px] font-semibold uppercase tracking-wider text-text-muted;
+  }
+
+  .stat-card {
+    @apply card p-3;
+  }
+}
+
+/* Leaflet — dark theme adjustments */
 .leaflet-container {
   height: 100%;
   width: 100%;
-  border-radius: 0.5rem;
+  background: #050810 !important;
+  font-family: Inter, system-ui, sans-serif;
 }
 
-body {
-  font-family: system-ui, -apple-system, sans-serif;
-  @apply bg-gray-50 text-gray-900;
+.leaflet-control-attribution {
+  background: rgba(13, 21, 39, 0.85) !important;
+  color: #5b6c87 !important;
+  font-size: 9px !important;
+  padding: 2px 6px !important;
+  border: 1px solid #1a2a44;
+  border-radius: 4px;
 }
+
+.leaflet-control-attribution a {
+  color: #00d4ff !important;
+}
+
+.leaflet-bar a {
+  background: #0d1527 !important;
+  color: #e7eef9 !important;
+  border: 1px solid #1e3a5f !important;
+}
+
+.leaflet-bar a:hover {
+  background: #162236 !important;
+  color: #00d4ff !important;
+}
+
+.leaflet-control-scale-line {
+  background: rgba(13, 21, 39, 0.85) !important;
+  color: #e7eef9 !important;
+  border: 1px solid #1e3a5f !important;
+  border-top: none;
+  padding: 2px 6px !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #0d1527 !important;
+  color: #e7eef9 !important;
+  border: 1px solid #1e3a5f !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
+  border-radius: 8px !important;
+}
+
+.leaflet-popup-tip {
+  background: #0d1527 !important;
+  border: 1px solid #1e3a5f !important;
+}
+
+.leaflet-popup-close-button {
+  color: #5b6c87 !important;
+}
+
+.caern-popup {
+  min-width: 180px;
+  font-size: 12px;
+}
+
+.caern-popup .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid #1a2a44;
+}
+
+.caern-popup .row:last-child { border-bottom: none; }
+.caern-popup .row .k { color: #8fa1bd; }
+.caern-popup .row .v { color: #e7eef9; font-weight: 600; }

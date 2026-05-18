@@ -7,6 +7,7 @@ export const jobsApi = {
     after_image_id: string;
     model_id?: string;
     confidence_threshold?: number;
+    min_area_m2?: number;
   }): Promise<AnalysisJob> => {
     const { data } = await apiClient.post<AnalysisJob>("/jobs", params);
     return data;

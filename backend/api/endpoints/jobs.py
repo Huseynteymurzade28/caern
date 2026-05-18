@@ -27,6 +27,7 @@ class CreateJobRequest(BaseModel):
     after_image_id: str
     model_id: Optional[str] = None
     confidence_threshold: float = 0.5
+    min_area_m2: float = 25.0
 
 
 class JobResponse(BaseModel):
@@ -35,6 +36,9 @@ class JobResponse(BaseModel):
     progress: float
     created_at: datetime
     owner_id: str
+    detection_mode: Optional[str] = None
+    min_area_m2: Optional[float] = None
+    confidence_threshold: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -64,6 +68,7 @@ async def create_job(body: CreateJobRequest, session: DBSession, current_user: C
         owner_id=current_user.id,
         model_id=body.model_id,
         confidence_threshold=body.confidence_threshold,
+        min_area_m2=body.min_area_m2,
         status=JobStatus.created,
     )
     job_repo = JobRepository(AnalysisJob, session)
@@ -80,6 +85,7 @@ async def create_job(body: CreateJobRequest, session: DBSession, current_user: C
             "before_path": before_img.storage_path,
             "after_path": after_img.storage_path,
             "confidence_threshold": body.confidence_threshold,
+            "min_area_m2": body.min_area_m2,
         },
         queue="analysis",
     )
@@ -135,7 +141,26 @@ async def job_results(job_id: str, session: DBSession, current_user: CurrentUser
             "jobId": job_id,
             "status": job.status,
             "featureCount": len(features),
+            "detectionMode": job.detection_mode,
+            "metrics": job.metric_summary or {},
         },
+    }
+
+
+@router.get("/{job_id}/metrics", dependencies=[require_permission("jobs:read")])
+async def job_metrics(job_id: str, session: DBSession, current_user: CurrentUser):
+    """Return aggregated metrics produced by the analysis pipeline."""
+    job_repo = JobRepository(AnalysisJob, session)
+    job = await job_repo.get(job_id)
+    if not job:
+        raise NotFoundError(f"Job bulunamadı: {job_id}")
+    return {
+        "jobId": job_id,
+        "status": job.status,
+        "detectionMode": job.detection_mode,
+        "minAreaM2": job.min_area_m2,
+        "confidenceThreshold": job.confidence_threshold,
+        "metrics": job.metric_summary or {},
     }
 
 

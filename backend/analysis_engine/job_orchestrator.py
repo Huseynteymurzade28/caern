@@ -1,28 +1,34 @@
-"""AnalysisJob orchestrator: start, cancel, progress, produce results.
+"""AnalysisJob orchestrator: pipeline + metric aggregation.
 
-Detection stratejisi:
-1. Klasik CV (pixel fark + morfoloji) ile degisim bolgelerini bul (hizli).
-2. SAM (varsa) her bolgeyi gercek nesne sinirina rafine eder; mask -> polygon.
-3. SAM basarisizsa axis-aligned bbox poligonu kullanilir.
-
-Bu sayede SAM gercekten ise yariyor (bbox -> hassas poligon) ve GPU yoksa bile
-classical-CV her zaman elle tutulur sonuc uretir.
+Pipeline:
+  1. CRS doğrulama → WGS-84'e dönüştürme → ko-registrasyon
+  2. RGB yükleme + sub-pixel hizalama
+  3. NDI tabanlı değişim tespiti + bağlı bileşen + otomatik kategorize
+  4. (Opsiyonel) SAM rafine etmesi — bbox → hassas poligon
+  5. Piksel koordinatlarını WGS-84'e çevir
+  6. Metrik özet (toplam alan, kategori dağılımı, histogram, top-5 GeoJSON)
 """
 from __future__ import annotations
 
 import concurrent.futures
 import tempfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
-from shapely.geometry import Polygon, box
+import rasterio
+from pyproj import Geod
+from shapely.geometry import Polygon, mapping
 
-from ai_models.base import Detection
 from ai_models.model_registry import registry
-from analysis_engine.classical_detector import detect_changes as classical_detect
-from common_utils.config import settings
+from analysis_engine.classical_detector import (
+    DEFAULT_MIN_AREA_M2,
+    DEFAULT_PIXEL_AREA_M2,
+    RegionDetection,
+    detect_changes as classical_detect,
+    pixel_diff_histogram,
+)
 from common_utils.exceptions import JobCancelledError
 from common_utils.logger import get_logger
 from geo_processing.alignment import align_to_reference, normalize_to_wgs84
@@ -31,22 +37,25 @@ from geo_processing.metadata import validate_crs
 
 log = get_logger(__name__)
 
-MAX_RETRIES = 3
-# SAM CPU'da yavas; rafineye giren bbox sayisini sinirla.
 MAX_SAM_REFINE = 15
-# SAM encoder full-res goruntuyu CPU'da kodlamak dakikalarca surer.
-# Bu uzun kenari asma — kalitesini cok bozmaz, suresi 10x azalir.
 SAM_MAX_SIDE = 1024
-# Her goruntu icin SAM islemine ayrilan maksimum sure (sn).
 SAM_TIMEOUT_SECONDS = 60
+
+_GEOD = Geod(ellps="WGS84")
 
 
 class JobOrchestrator:
     """Coordinates the full analysis pipeline for a single job."""
 
-    def __init__(self, job_id: str, confidence_threshold: float = 0.5) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        confidence_threshold: float = 0.5,
+        min_area_m2: float = DEFAULT_MIN_AREA_M2,
+    ) -> None:
         self.job_id = job_id
         self.confidence_threshold = confidence_threshold
+        self.min_area_m2 = min_area_m2
         self._cancelled = False
         self._detection_mode = "unknown"
 
@@ -62,8 +71,9 @@ class JobOrchestrator:
         before_path: Path,
         after_path: Path,
         progress_callback=None,
-    ) -> List[dict]:
-        """Full pipeline; returns list of GeoJSON Feature dicts."""
+    ) -> Dict[str, Any]:
+        """Returns {"features": [...], "metrics": {...}}."""
+
         def _progress(pct: float, msg: str = "") -> None:
             if progress_callback:
                 progress_callback(pct, msg)
@@ -83,7 +93,9 @@ class JobOrchestrator:
             self._check_cancelled()
 
             _progress(25, "Coğrafi hizalanıyor")
-            after_aligned = align_to_reference(after_wgs, before_wgs, tmp_dir / "after_aligned.tif")
+            after_aligned = align_to_reference(
+                after_wgs, before_wgs, tmp_dir / "after_aligned.tif"
+            )
             self._check_cancelled()
 
             _progress(35, "Görüntüler yükleniyor")
@@ -91,9 +103,15 @@ class JobOrchestrator:
             after_rgb = load_as_rgb(after_aligned)
             self._check_cancelled()
 
+            pixel_area_m2 = self._estimate_pixel_area_m2(before_wgs)
+            log.info("pixel_area_m2", v=pixel_area_m2)
+
             _progress(45, "Değişim bölgeleri tespit ediliyor")
-            before_dets, after_dets = classical_detect(
-                before_rgb, after_rgb, self.confidence_threshold
+            regions, diff_img = classical_detect(
+                before_rgb,
+                after_rgb,
+                min_area_m2=self.min_area_m2,
+                pixel_area_m2=pixel_area_m2,
             )
             self._check_cancelled()
 
@@ -101,11 +119,10 @@ class JobOrchestrator:
             sam = self._try_load_sam()
             self._check_cancelled()
 
-            if sam is not None and (before_dets or after_dets):
-                _progress(70, f"SAM ile {len(before_dets) + len(after_dets)} bölge rafine ediliyor")
+            if sam is not None and regions:
+                _progress(70, f"SAM ile {len(regions)} bölge rafine ediliyor")
                 try:
-                    before_dets = self._refine_with_sam(sam, before_rgb, before_dets)
-                    after_dets = self._refine_with_sam(sam, after_rgb, after_dets)
+                    regions = self._refine_with_sam(sam, after_rgb, regions)
                     self._detection_mode = "SAM-refined"
                 except Exception as exc:
                     log.warning("sam_refine_failed", job_id=self.job_id, exc=str(exc))
@@ -114,22 +131,29 @@ class JobOrchestrator:
                 self._detection_mode = "classical-CV"
 
             _progress(85, "Coğrafi koordinatlar hesaplanıyor")
-            import rasterio
             with rasterio.open(before_wgs) as src:
                 transform = src.transform
 
-            features = self._aggregate_results(
-                before_dets, after_dets, transform, before_rgb.shape[:2]
-            )
+            features = self._regions_to_features(regions, transform)
 
             _progress(
-                95,
-                f"Sonuçlar hazırlanıyor (mod: {self._detection_mode}, {len(features)} değişiklik)",
+                92,
+                f"Metrikler hesaplanıyor ({self._detection_mode}, {len(features)} bölge)",
             )
-            return features
+            metrics = self._compute_metrics(
+                features=features,
+                regions=regions,
+                diff_img=diff_img,
+                img_shape=before_rgb.shape[:2],
+                pixel_area_m2=pixel_area_m2,
+            )
+            metrics["detection_mode"] = self._detection_mode
+
+            return {"features": features, "metrics": metrics}
+
+    # ─── SAM ──────────────────────────────────────────────────────────
 
     def _try_load_sam(self):
-        """SAM yuklemeye calis; basarisizsa None dondur."""
         try:
             sam = registry.get_sam()
             log.info("sam_ready", job_id=self.job_id)
@@ -139,21 +163,13 @@ class JobOrchestrator:
             return None
 
     def _refine_with_sam(
-        self, sam, image: np.ndarray, detections: List[Detection]
-    ) -> List[Detection]:
-        """SAM ile her bbox'i hassas maskeye cevirir.
+        self, sam, image: np.ndarray, regions: List[RegionDetection]
+    ) -> List[RegionDetection]:
+        if not regions:
+            return regions
 
-        Performans: goruntuyu SAM_MAX_SIDE'a downsample eder (CPU encoder hizi
-        ~10x artar), bbox'lari olceklendirir, sonra mask'i orijinal boyuta
-        geri buyutur. Tum islem SAM_TIMEOUT_SECONDS ile sinirli — asarsa
-        orijinal bbox'lar mask'siz dondurulur.
-        """
-        if not detections:
-            return detections
-
-        # En guvenilir N taneyi rafine et, kalani aynen birak.
-        to_refine = detections[:MAX_SAM_REFINE]
-        passthrough = detections[MAX_SAM_REFINE:]
+        to_refine = regions[:MAX_SAM_REFINE]
+        passthrough = regions[MAX_SAM_REFINE:]
 
         H, W = image.shape[:2]
         max_side = max(H, W)
@@ -165,7 +181,7 @@ class JobOrchestrator:
             scale = 1.0
             small = image
 
-        small_boxes = [[b * scale for b in d.bbox] for d in to_refine]
+        small_boxes = [[b * scale for b in r.bbox] for r in to_refine]
 
         def _do_predict():
             return sam.predict_with_boxes(small, small_boxes)
@@ -174,146 +190,197 @@ class JobOrchestrator:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 refined = pool.submit(_do_predict).result(timeout=SAM_TIMEOUT_SECONDS)
         except concurrent.futures.TimeoutError:
-            log.warning(
-                "sam_timeout", job_id=self.job_id, timeout=SAM_TIMEOUT_SECONDS,
-                refine_count=len(to_refine),
-            )
-            return detections  # Hepsi mask'siz dondu — bbox poligonu kullanilacak
+            log.warning("sam_timeout", job_id=self.job_id)
+            return regions
 
-        result: List[Detection] = []
+        result: List[RegionDetection] = []
         for orig, ref in zip(to_refine, refined):
-            mask_full = None
+            new_mask = None
             new_bbox = orig.bbox
-
             if ref.mask is not None and ref.mask.any():
                 if scale < 1.0:
-                    mask_full = cv2.resize(
+                    new_mask = cv2.resize(
                         ref.mask.astype(np.uint8), (W, H),
                         interpolation=cv2.INTER_NEAREST,
                     ).astype(bool)
                 else:
-                    mask_full = ref.mask
-
-                if mask_full.any():
-                    ys, xs = np.where(mask_full)
-                    new_bbox = [
+                    new_mask = ref.mask
+                if new_mask.any():
+                    ys, xs = np.where(new_mask)
+                    new_bbox = (
                         float(xs.min()), float(ys.min()),
                         float(xs.max()), float(ys.max()),
-                    ]
-
+                    )
             result.append(
-                Detection(
+                RegionDetection(
+                    label_id=orig.label_id,
                     bbox=new_bbox,
+                    centroid_px=orig.centroid_px,
+                    area_px=orig.area_px,
+                    area_m2=orig.area_m2,
                     confidence=orig.confidence,
-                    class_id=orig.class_id,
-                    class_name=orig.class_name,
-                    mask=mask_full,
+                    category=orig.category,
+                    mean_before_rgb=orig.mean_before_rgb,
+                    mean_after_rgb=orig.mean_after_rgb,
+                    pixel_mask=new_mask if new_mask is not None else orig.pixel_mask,
                 )
             )
 
         result.extend(passthrough)
         return result
 
-    def _aggregate_results(
-        self,
-        before_dets: List[Detection],
-        after_dets: List[Detection],
-        transform,
-        img_shape: Tuple[int, int],
+    # ─── Geo / poligon ───────────────────────────────────────────────
+
+    @staticmethod
+    def _estimate_pixel_area_m2(raster_path: Path) -> float:
+        """Raster'in WGS-84 hücre boyutundan piksel basina m^2 tahmini.
+
+        Yaklasik: enlemde latitude-baga ı bir cosinus duzeltmesi ile.
+        """
+        try:
+            with rasterio.open(raster_path) as src:
+                a = src.transform.a   # x-çözünürlüğü (derece)
+                e = -src.transform.e  # y-çözünürlüğü (derece)
+                lat = (src.bounds.top + src.bounds.bottom) / 2.0
+                # 1 derece enlem ≈ 111_320 m. Boylam: 111_320 * cos(lat).
+                lat_m = 111_320.0
+                lon_m = 111_320.0 * float(np.cos(np.deg2rad(lat)))
+                px_w = abs(a) * lon_m
+                px_h = abs(e) * lat_m
+                area = px_w * px_h
+                if not np.isfinite(area) or area <= 0:
+                    return DEFAULT_PIXEL_AREA_M2
+                return float(area)
+        except Exception as exc:
+            log.warning("pixel_area_estimate_failed", exc=str(exc))
+            return DEFAULT_PIXEL_AREA_M2
+
+    def _regions_to_features(
+        self, regions: List[RegionDetection], transform
     ) -> List[dict]:
-        """Compare before/after detections and produce GeoJSON features."""
-        before_polys = [(d, self._det_to_polygon(d, transform)) for d in before_dets]
-        after_polys = [(d, self._det_to_polygon(d, transform)) for d in after_dets]
+        import rasterio.transform as rt
 
-        features: list[dict] = []
-        seen_after: set[int] = set()
+        features: List[dict] = []
+        for r in regions:
+            poly = self._region_to_polygon(r, transform)
+            if poly is None or poly.is_empty:
+                continue
 
-        for b_det, b_poly in before_polys:
-            matched = False
-            for j, (a_det, a_poly) in enumerate(after_polys):
-                if j in seen_after:
-                    continue
-                inter = b_poly.intersection(a_poly).area
-                union = b_poly.union(a_poly).area
-                iou = inter / union if union > 0 else 0
-                if iou >= 0.3:
-                    seen_after.add(j)
-                    matched = True
-                    break
-            if not matched:
-                features.append(self._make_feature(b_det, b_poly, "lost"))
+            # Centroid WGS-84
+            cx_px, cy_px = r.centroid_px
+            cx_lon, cy_lat = rt.xy(transform, cy_px, cx_px)
 
-        for j, (a_det, a_poly) in enumerate(after_polys):
-            if j not in seen_after:
-                features.append(self._make_feature(a_det, a_poly, "new"))
+            # Gercek alan (m^2) - geodesik
+            try:
+                lon_arr = [c[0] for c in poly.exterior.coords]
+                lat_arr = [c[1] for c in poly.exterior.coords]
+                geo_area_m2 = abs(_GEOD.polygon_area_perimeter(lon_arr, lat_arr)[0])
+            except Exception:
+                geo_area_m2 = r.area_m2
 
+            features.append({
+                "type": "Feature",
+                "geometry": mapping(poly),
+                "properties": {
+                    "category": r.category,
+                    "confidence": r.confidence,
+                    "areaM2": float(geo_area_m2),
+                    "areaPx": int(r.area_px),
+                    "centroid": [float(cx_lon), float(cy_lat)],
+                    "bbox": list(r.bbox),
+                    "labelId": int(r.label_id),
+                },
+            })
         return features
 
     @staticmethod
-    def _det_to_polygon(d: Detection, transform) -> Polygon:
-        """Detection -> WGS-84 cografi Polygon.
-
-        Mask varsa contour cikarip cografi koordinatlara cevirir (gerçek sekil).
-        Yoksa bbox dikdortgeni kullanir.
-        """
+    def _region_to_polygon(r: RegionDetection, transform) -> Polygon | None:
         import rasterio.transform as rt
 
-        if d.mask is not None and d.mask.any():
-            poly = JobOrchestrator._mask_to_polygon(d.mask)
-            if poly is not None and not poly.is_empty:
-                geo_coords = [rt.xy(transform, py, px) for px, py in poly.exterior.coords]
-                geo_poly = Polygon(geo_coords)
-                if geo_poly.is_valid and geo_poly.area > 0:
-                    return geo_poly
+        if r.pixel_mask is not None and r.pixel_mask.any():
+            m = (r.pixel_mask.astype(np.uint8)) * 255
+            contours, _ = cv2.findContours(
+                m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            if contours:
+                cnt = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(cnt) >= 20:
+                    eps = 0.005 * cv2.arcLength(cnt, closed=True)
+                    cnt = cv2.approxPolyDP(cnt, eps, closed=True)
+                    coords = cnt.reshape(-1, 2)
+                    if len(coords) >= 3:
+                        geo_coords = [
+                            rt.xy(transform, py, px) for px, py in coords
+                        ]
+                        poly = Polygon(geo_coords)
+                        if not poly.is_valid:
+                            poly = poly.buffer(0)
+                        if poly.is_valid and not poly.is_empty and hasattr(poly, "exterior"):
+                            return poly
 
-        x1, y1, x2, y2 = d.bbox
+        # Fallback — bbox dortgeni
+        x1, y1, x2, y2 = r.bbox
         corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
         geo_corners = [rt.xy(transform, py, px) for px, py in corners]
         return Polygon(geo_corners)
 
-    @staticmethod
-    def _mask_to_polygon(mask: np.ndarray) -> Polygon | None:
-        """Binary mask -> sadelestirilmis Polygon (en buyuk kontur)."""
-        from shapely.geometry import MultiPolygon
-
-        m = mask.astype(np.uint8) * 255
-        contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
-
-        cnt = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(cnt) < 20:
-            return None
-
-        # Douglas-Peucker basitlestirme; cok kose olusmasin
-        eps = 0.005 * cv2.arcLength(cnt, closed=True)
-        cnt = cv2.approxPolyDP(cnt, eps, closed=True)
-
-        coords = cnt.reshape(-1, 2)
-        if len(coords) < 3:
-            return None
-
-        poly = Polygon(coords)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-
-        # buffer(0) MultiPolygon uretebilir; en buyuk parcayi al
-        if isinstance(poly, MultiPolygon):
-            poly = max(poly.geoms, key=lambda g: g.area)
-
-        return poly if poly.is_valid and not poly.is_empty and hasattr(poly, "exterior") else None
+    # ─── Metrikler ────────────────────────────────────────────────────
 
     @staticmethod
-    def _make_feature(det: Detection, poly: Polygon, change_type: str) -> dict:
-        from shapely.geometry import mapping
+    def _compute_metrics(
+        features: List[dict],
+        regions: List[RegionDetection],
+        diff_img: np.ndarray,
+        img_shape: Tuple[int, int],
+        pixel_area_m2: float,
+    ) -> Dict[str, Any]:
+        H, W = img_shape
+        total_area_m2 = float(H * W * pixel_area_m2)
+
+        per_cat: Dict[str, Dict[str, float]] = {}
+        total_changed = 0.0
+        for f in features:
+            cat = f["properties"]["category"]
+            area = float(f["properties"]["areaM2"])
+            entry = per_cat.setdefault(cat, {"count": 0, "area_m2": 0.0})
+            entry["count"] += 1
+            entry["area_m2"] += area
+            total_changed += area
+
+        avg_conf = (
+            float(np.mean([f["properties"]["confidence"] for f in features]))
+            if features else 0.0
+        )
+
+        # Top-5 en buyuk degisim (full GeoJSON Feature)
+        top5 = sorted(
+            features, key=lambda f: f["properties"]["areaM2"], reverse=True
+        )[:5]
+        top5_collection = {
+            "type": "FeatureCollection",
+            "features": top5,
+        }
+
+        histogram = pixel_diff_histogram(diff_img, bins=10)
+
+        change_pct = (total_changed / total_area_m2 * 100.0) if total_area_m2 > 0 else 0.0
 
         return {
-            "type": "Feature",
-            "geometry": mapping(poly),
-            "properties": {
-                "classLabel": det.class_name,
-                "confidence": det.confidence,
-                "changeType": change_type,
-                "areaM2": None,
+            "totalAreaM2": total_area_m2,
+            "totalAreaKm2": total_area_m2 / 1_000_000.0,
+            "totalChangedAreaM2": total_changed,
+            "totalChangedAreaKm2": total_changed / 1_000_000.0,
+            "changePercent": change_pct,
+            "objectCount": len(features),
+            "avgConfidence": avg_conf,
+            "byCategory": {
+                cat: {
+                    "count": int(per_cat.get(cat, {"count": 0})["count"]),
+                    "areaM2": float(per_cat.get(cat, {"area_m2": 0.0})["area_m2"]),
+                }
+                for cat in ("YENI_YAPI", "YIKIM", "VEJETASYON", "YUZEY_DEG")
             },
+            "topRegions": top5_collection,
+            "pixelDiffHistogram": histogram,
+            "pixelAreaM2": pixel_area_m2,
         }

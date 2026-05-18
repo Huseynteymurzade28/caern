@@ -25,6 +25,8 @@ export interface AnalysisJob {
   created_at: string;
   owner_id: string;
   confidence_threshold: number;
+  min_area_m2?: number;
+  detection_mode?: string | null;
 }
 
 export interface GeoImage {
@@ -37,16 +39,49 @@ export interface GeoImage {
   crs: string | null;
 }
 
+export type ChangeCategory = "YENI_YAPI" | "YIKIM" | "VEJETASYON" | "YUZEY_DEG";
+
 export interface ChangeFeature {
   type: "Feature";
   id: string;
   geometry: GeoJSON.Polygon;
   properties: {
-    classLabel: string;
+    category?: ChangeCategory | string;
+    classLabel?: string;
     confidence: number;
-    changeType: "new" | "lost";
+    changeType?: ChangeCategory | "new" | "lost" | string;
     areaM2: number | null;
+    areaPx?: number | null;
+    centroid?: [number, number] | null;
+    bbox?: [number, number, number, number] | null;
   };
+}
+
+export interface CategorySummary {
+  count: number;
+  areaM2: number;
+}
+
+export interface HistogramBin {
+  bin: number;
+  range_min: number;
+  range_max: number;
+  count: number;
+}
+
+export interface MetricSummary {
+  totalAreaM2?: number;
+  totalAreaKm2?: number;
+  totalChangedAreaM2?: number;
+  totalChangedAreaKm2?: number;
+  changePercent?: number;
+  objectCount?: number;
+  avgConfidence?: number;
+  byCategory?: Record<ChangeCategory, CategorySummary>;
+  topRegions?: { type: "FeatureCollection"; features: ChangeFeature[] };
+  pixelDiffHistogram?: HistogramBin[];
+  pixelAreaM2?: number;
+  detection_mode?: string;
 }
 
 export interface FeatureCollection {
@@ -56,6 +91,8 @@ export interface FeatureCollection {
     jobId: string;
     status: string;
     featureCount: number;
+    detectionMode?: string;
+    metrics?: MetricSummary;
   };
 }
 

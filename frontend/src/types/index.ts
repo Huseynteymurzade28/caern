@@ -27,6 +27,7 @@ export interface AnalysisJob {
   confidence_threshold: number;
   min_area_m2?: number;
   detection_mode?: string | null;
+  metric_summary?: MetricSummary | null;
 }
 
 export interface GeoImage {

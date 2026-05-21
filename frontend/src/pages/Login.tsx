@@ -1,7 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { authApi } from "@/api/auth";
 import { useAuthStore } from "@/store/auth";
@@ -80,7 +80,13 @@ export default function Login() {
           </button>
         </form>
 
-        <div className="mt-6 pt-4 border-t border-border-subtle text-center">
+        <div className="mt-6 pt-4 border-t border-border-subtle text-center space-y-2">
+          <p className="text-xs text-text-muted">
+            Hesabın yok mu?{" "}
+            <Link to="/signup" className="text-accent hover:underline">
+              Kayıt Ol
+            </Link>
+          </p>
           <p className="text-[10px] text-text-subtle font-mono">
             CAERN © 2026 — coğrafi değişim tespiti platformu
           </p>

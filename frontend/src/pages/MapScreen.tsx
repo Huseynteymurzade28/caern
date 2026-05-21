@@ -32,26 +32,52 @@ export default function MapScreen() {
     setActiveJob(jobId);
     setSelectedFeature(null);
 
-    // Resume from existing results if job already completed
-    jobsApi.getResults(jobId).then((fc) => {
-      if (fc?.features?.length || fc?.metadata?.status === "completed") {
-        setResults(fc);
-        setProgress(100, "COMPLETED");
-      }
-    }).catch(() => {});
+    let es: EventSource | null = null;
+    let cancelled = false;
 
-    const es = jobsApi.streamProgress(
-      jobId,
-      (evt) => setProgress(evt.progress, evt.message),
-      async () => {
-        try {
-          const fc = await jobsApi.getResults(jobId!);
+    (async () => {
+      // Önce mevcut sonuçları getir — tamamlanmış analizler anında açılsın
+      try {
+        const fc = await jobsApi.getResults(jobId);
+        if (cancelled) return;
+        const status = fc?.metadata?.status;
+        const isTerminal =
+          status === "completed" || status === "failed" || status === "cancelled";
+
+        if (fc?.features?.length || isTerminal) {
           setResults(fc);
-        } catch {}
-      },
-      () => toast.error("SSE bağlantısı kesildi")
-    );
-    return () => es.close();
+          setProgress(
+            100,
+            status === "failed" ? "FAILED" :
+            status === "cancelled" ? "CANCELLED" : "COMPLETED",
+          );
+        }
+
+        // SSE'yi yalnızca devam eden analizler için aç
+        if (!isTerminal) {
+          es = jobsApi.streamProgress(
+            jobId,
+            (evt) => setProgress(evt.progress, evt.message),
+            async () => {
+              try {
+                const updated = await jobsApi.getResults(jobId!);
+                if (!cancelled) setResults(updated);
+              } catch {}
+            },
+            () => {
+              if (!cancelled) toast.error("SSE bağlantısı kesildi");
+            },
+          );
+        }
+      } catch {
+        if (!cancelled) toast.error("Analiz sonuçları yüklenemedi");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
   }, [jobId]);
 
   function toggleLayer(key: string) {

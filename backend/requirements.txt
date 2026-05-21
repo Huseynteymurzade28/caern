@@ -40,13 +40,13 @@ segment-anything==1.0
 minio==7.2.7
 
 # Reporting
-weasyprint==62.1
-jinja2==3.1.4
 reportlab==4.1.0
+jinja2==3.1.4
 
 # Utilities
 pydantic==2.7.1
 pydantic-settings==2.2.1
+email-validator==2.1.1
 python-dotenv==1.0.1
 structlog==24.1.0
 pillow==10.3.0

@@ -27,12 +27,6 @@ def test_csv_generation():
 
 
 def test_pdf_generation():
-    pytest_import = __import__("pytest")
-    try:
-        from weasyprint import HTML
-    except Exception:
-        pytest_import.skip("WeasyPrint not installed")
-
     from reporting.pdf_generator import generate_pdf
     results = [_make_result()]
     pdf = generate_pdf("job-y", results)

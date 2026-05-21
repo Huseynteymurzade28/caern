@@ -39,6 +39,7 @@ class JobResponse(BaseModel):
     detection_mode: Optional[str] = None
     min_area_m2: Optional[float] = None
     confidence_threshold: Optional[float] = None
+    metric_summary: Optional[dict] = None
 
     class Config:
         from_attributes = True

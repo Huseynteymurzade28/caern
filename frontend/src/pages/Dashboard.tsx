@@ -4,7 +4,7 @@ import { apiClient } from "@/api/client";
 import type { AnalysisJob } from "@/types";
 import { format } from "date-fns";
 import { tr } from "date-fns/locale";
-import { Plus, ChevronRight, Activity, Clock, TrendingUp } from "lucide-react";
+import { Plus, ChevronRight, Activity, Clock, TrendingUp, Eye } from "lucide-react";
 import clsx from "clsx";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -111,53 +111,77 @@ export default function Dashboard() {
                 <th className="px-5 py-3 text-left label-sm">ID</th>
                 <th className="px-5 py-3 text-left label-sm">Durum</th>
                 <th className="px-5 py-3 text-left label-sm">İlerleme</th>
+                <th className="px-5 py-3 text-left label-sm">Sonuç</th>
                 <th className="px-5 py-3 text-left label-sm">Mod</th>
                 <th className="px-5 py-3 text-left label-sm">Oluşturulma</th>
                 <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody>
-              {jobs.map((job) => (
-                <tr
-                  key={job.id}
-                  className="border-b border-border-subtle hover:bg-bg-elev/50 cursor-pointer transition-colors"
-                  onClick={() => navigate(`/map/${job.id}`)}
-                >
-                  <td className="px-5 py-3 font-mono text-xs text-text-muted">
-                    {job.id.slice(0, 12)}…
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className={clsx("badge border", STATUS_COLORS[job.status])}>
-                      {STATUS_LABEL[job.status] || job.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-28 bg-bg-base rounded-full h-1 overflow-hidden">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${job.progress}%`,
-                            background: "linear-gradient(90deg, #0099bb, #00d4ff)",
-                          }}
-                        />
-                      </div>
-                      <span className="text-[10px] text-text-muted font-mono w-8">
-                        {Math.round(job.progress)}%
+              {jobs.map((job) => {
+                const m = job.metric_summary || undefined;
+                const objCount = m?.objectCount;
+                const changeArea = m?.totalChangedAreaM2;
+                const isCompleted = job.status === "completed";
+                return (
+                  <tr
+                    key={job.id}
+                    className="border-b border-border-subtle hover:bg-bg-elev/50 cursor-pointer transition-colors"
+                    onClick={() => navigate(`/map/${job.id}`)}
+                    title={isCompleted ? "Sonucu görüntülemek için tıkla" : "Analizi aç"}
+                  >
+                    <td className="px-5 py-3 font-mono text-xs text-text-muted">
+                      {job.id.slice(0, 12)}…
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={clsx("badge border", STATUS_COLORS[job.status])}>
+                        {STATUS_LABEL[job.status] || job.status}
                       </span>
-                    </div>
-                  </td>
-                  <td className="px-5 py-3 text-xs font-mono text-text-muted">
-                    {job.detection_mode || "—"}
-                  </td>
-                  <td className="px-5 py-3 text-text-muted text-xs">
-                    {format(new Date(job.created_at), "d MMM yyyy HH:mm", { locale: tr })}
-                  </td>
-                  <td className="px-5 py-3 text-right">
-                    <ChevronRight size={14} className="text-text-subtle ml-auto" />
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-28 bg-bg-base rounded-full h-1 overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${job.progress}%`,
+                              background: "linear-gradient(90deg, #0099bb, #00d4ff)",
+                            }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-text-muted font-mono w-8">
+                          {Math.round(job.progress)}%
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3 text-xs text-text-muted">
+                      {isCompleted && objCount !== undefined ? (
+                        <span className="font-mono">
+                          {objCount} nesne
+                          {changeArea ? ` • ${Math.round(changeArea)} m²` : ""}
+                        </span>
+                      ) : (
+                        <span className="text-text-subtle">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-xs font-mono text-text-muted">
+                      {job.detection_mode || "—"}
+                    </td>
+                    <td className="px-5 py-3 text-text-muted text-xs">
+                      {format(new Date(job.created_at), "d MMM yyyy HH:mm", { locale: tr })}
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      {isCompleted ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-accent">
+                          <Eye size={12} /> Sonucu Gör
+                        </span>
+                      ) : (
+                        <ChevronRight size={14} className="text-text-subtle ml-auto" />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

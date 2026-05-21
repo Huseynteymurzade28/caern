@@ -5,12 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# System dependencies (GDAL, WeasyPrint, OpenCV runtime libs, etc.)
+# System dependencies (GDAL, OpenCV runtime libs, DejaVu fonts for Turkish chars in PDF)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin libgdal-dev libgeos-dev libproj-dev \
-    libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 \
     libcairo2 libffi-dev libssl-dev \
     libgl1 libglib2.0-0 \
+    fonts-dejavu-core fonts-dejavu-extra \
     curl git build-essential \
     && rm -rf /var/lib/apt/lists/*
 

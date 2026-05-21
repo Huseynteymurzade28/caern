@@ -7,6 +7,19 @@ export const authApi = {
     return data;
   },
 
+  register: async (
+    email: string,
+    username: string,
+    password: string,
+  ): Promise<TokenPair> => {
+    const { data } = await apiClient.post<TokenPair>("/auth/register", {
+      email,
+      username,
+      password,
+    });
+    return data;
+  },
+
   refresh: async (refresh_token: string): Promise<TokenPair> => {
     const { data } = await apiClient.post<TokenPair>("/auth/refresh", { refresh_token });
     return data;

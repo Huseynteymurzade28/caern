@@ -12,6 +12,10 @@ certs:
 .env:
 	cp .env.example .env
 
+# Build / rebuild all images without (re)starting
+build:
+	sudo docker compose build
+
 # Start all services
 up: .env certs
 	sudo docker compose up -d --build
